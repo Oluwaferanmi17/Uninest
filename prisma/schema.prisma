@@ -1,0 +1,150 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  // output   = "../generated/prisma"
+}
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  passwordHash  String
+  role          String    @default("STUDENT") // "STUDENT" | "HOST" | "ADMIN"
+  phone         String?
+  avatar        String?
+  university    String?   // For students
+  businessName  String?   // For hosts
+  aboutMe       String?
+  address       String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  listings            Listing[]
+  bookingsAsStudent   Booking[]       @relation("StudentBookings")
+  bookingsAsHost      Booking[]       @relation("HostBookings")
+  reviews             Review[]
+  conversationsAsStudent Conversation[] @relation("StudentConversations")
+  conversationsAsHost    Conversation[] @relation("HostConversations")
+  sentMessages        Message[]
+
+  @@map("users")
+}
+
+model Listing {
+  id                String       @id @default(cuid())
+  title             String
+  description       String
+  propertyType      String       @default("SELF_CON")
+  numberOfRooms     Int
+  address           String
+  nearestUniversity String
+  distanceToCampus  String       // e.g. "5 mins walk"
+  pricePerSemester  Float
+  isAvailable       Boolean      @default(true)
+  isVerified        Boolean      @default(false)
+  amenities         String       @default("[]") // JSON string array of amenity strings
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  // Relations
+  hostId    String
+  host      User           @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  images    ListingImage[]
+  bookings  Booking[]
+  reviews   Review[]
+  conversations Conversation[]
+
+  @@map("listings")
+}
+
+model ListingImage {
+  id        String  @id @default(cuid())
+  url       String
+  publicId  String? // Cloudinary public ID
+  order     Int     @default(0)
+
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@map("listing_images")
+}
+
+model Booking {
+  id               String        @id @default(cuid())
+  moveInDate       DateTime
+  status           String        @default("PENDING") // "PENDING" | "CONFIRMED" | "REJECTED" | "CANCELLED"
+  paymentStatus    String        @default("PENDING") // "PENDING" | "PAID" | "REFUNDED"
+  paymentReference String?
+  amount           Float
+  semester         String        // e.g. "2025/2026 First Semester"
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  // Relations
+  studentId String
+  student   User    @relation("StudentBookings", fields: [studentId], references: [id], onDelete: Cascade)
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  hostId    String
+  host      User    @relation("HostBookings", fields: [hostId], references: [id], onDelete: Cascade)
+
+  @@map("bookings")
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  rating    Int      // 1-5
+  comment   String
+  createdAt DateTime @default(now())
+
+  // Relations
+  studentId String
+  student   User    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@map("reviews")
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  studentId String
+  student   User     @relation("StudentConversations", fields: [studentId], references: [id], onDelete: Cascade)
+  hostId    String
+  host      User     @relation("HostConversations", fields: [hostId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@unique([listingId, studentId, hostId])
+  @@map("conversations")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  body      String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  // Relations
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
