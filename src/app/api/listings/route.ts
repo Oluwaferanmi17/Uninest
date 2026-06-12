@@ -3,147 +3,244 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 
-// GET /api/listings — fetch listings with filters
+// GET /api/listings
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
+
+    const search = searchParams.get("search");
     const university = searchParams.get("university");
+
     const type = searchParams.get("type");
     const minPrice = searchParams.get("minPrice");
     const maxPrice = searchParams.get("maxPrice");
-    const sort = searchParams.get("sort") || "newest";
     const amenities = searchParams.get("amenities");
     const myListings = searchParams.get("myListings");
+    const available = searchParams.get("available");
+    const sort = searchParams.get("sort") || "newest";
 
     const session = await getServerSession(authOptions);
 
-    // Build where clause
+    const query = search || university;
+
+    const universityAliases: Record<string, string[]> = {
+      unilag: ["University of Lagos", "UNILAG", "Akoka"],
+
+      ui: ["University of Ibadan", "UI"],
+
+      oau: ["Obafemi Awolowo University", "OAU", "Ile-Ife"],
+
+      lasu: ["Lagos State University", "LASU"],
+
+      futa: ["Federal University of Technology Akure", "FUTA"],
+
+      uniben: ["University of Benin", "UNIBEN"],
+
+      unn: ["University of Nigeria Nsukka", "UNN"],
+
+      abu: ["Ahmadu Bello University", "ABU"],
+
+      cu: ["Covenant University", "CU", "Covenant"],
+
+      futo: ["Federal University of Technology Owerri", "FUTO"],
+
+      unilorin: ["University of Ilorin", "UNILORIN"],
+
+      lasustech: [
+        "Lagos State University of Science and Technology",
+        "LASUSTECH",
+      ],
+    };
+
     const where: any = {};
 
+    // My listings
     if (myListings === "true" && session) {
       where.hostId = (session.user as any).id;
     }
 
-    if (university) {
-      where.nearestUniversity = { contains: university, mode: "insensitive" };
+    // Availability
+    if (available === "true") {
+      where.isAvailable = true;
     }
 
+    // Search
+    if (query) {
+      const normalizedQuery = query.toLowerCase().trim();
+
+      const aliasMatches = universityAliases[normalizedQuery] || [];
+
+      where.OR = [
+        {
+          title: {
+            contains: query,
+            mode: "insensitive",
+          },
+        },
+
+        {
+          description: {
+            contains: query,
+            mode: "insensitive",
+          },
+        },
+
+        {
+          address: {
+            contains: query,
+            mode: "insensitive",
+          },
+        },
+
+        {
+          nearestUniversity: {
+            contains: query,
+            mode: "insensitive",
+          },
+        },
+
+        {
+          amenities: {
+            contains: query,
+          },
+        },
+
+        ...aliasMatches.map((name) => ({
+          nearestUniversity: {
+            contains: name,
+            mode: "insensitive",
+          },
+        })),
+      ];
+    }
+
+    // Property type
     if (type) {
       where.propertyType = type;
     }
 
+    // Price range
     if (minPrice || maxPrice) {
       where.pricePerSemester = {};
-      if (minPrice) where.pricePerSemester.gte = Number(minPrice);
-      if (maxPrice) where.pricePerSemester.lte = Number(maxPrice);
+
+      if (minPrice) {
+        where.pricePerSemester.gte = Number(minPrice);
+      }
+
+      if (maxPrice) {
+        where.pricePerSemester.lte = Number(maxPrice);
+      }
     }
 
+    // Amenities filter
     if (amenities) {
       const amenityList = amenities.split(",");
-      where.AND = amenityList.map((a: string) => ({
-        amenities: { contains: a }
-      }));
+
+      where.AND = [
+        ...(where.AND || []),
+
+        ...amenityList.map((amenity) => ({
+          amenities: {
+            contains: amenity,
+          },
+        })),
+      ];
     }
 
-    // Build orderBy
-    let orderBy: any = { createdAt: "desc" };
-    if (sort === "price_asc") orderBy = { pricePerSemester: "asc" };
-    if (sort === "price_desc") orderBy = { pricePerSemester: "desc" };
+    // Sorting
+    let orderBy: any = {
+      createdAt: "desc",
+    };
+
+    if (sort === "price_asc") {
+      orderBy = {
+        pricePerSemester: "asc",
+      };
+    }
+
+    if (sort === "price_desc") {
+      orderBy = {
+        pricePerSemester: "desc",
+      };
+    }
 
     const listings = await prisma.listing.findMany({
       where,
       orderBy,
+
       include: {
-        images: { orderBy: { order: "asc" }, take: 5 },
-        host: { select: { id: true, name: true, avatar: true } },
-        reviews: { select: { rating: true } },
-        _count: { select: { reviews: true, bookings: true } },
+        images: {
+          orderBy: {
+            order: "asc",
+          },
+          take: 5,
+        },
+
+        host: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+          },
+        },
+
+        reviews: {
+          select: {
+            rating: true,
+          },
+        },
+
+        _count: {
+          select: {
+            reviews: true,
+            bookings: true,
+          },
+        },
       },
     });
 
-    // Calculate average ratings and parse amenities
     const listingsWithRatings = listings.map((listing) => {
-      const avgRating =
+      const averageRating =
         listing.reviews.length > 0
-          ? listing.reviews.reduce((sum, r) => sum + r.rating, 0) /
+          ? listing.reviews.reduce((sum, review) => sum + review.rating, 0) /
             listing.reviews.length
           : 0;
+
       const { reviews, ...rest } = listing;
-      let parsedAmenities = [];
-      try { parsedAmenities = JSON.parse(rest.amenities); } catch(e) {}
-      return { ...rest, amenities: parsedAmenities, averageRating: Math.round(avgRating * 10) / 10 };
+
+      let parsedAmenities: string[] = [];
+
+      try {
+        parsedAmenities = JSON.parse(rest.amenities);
+      } catch {
+        parsedAmenities = [];
+      }
+
+      return {
+        ...rest,
+        amenities: parsedAmenities,
+        averageRating: Math.round(averageRating * 10) / 10,
+      };
     });
 
-    // Sort by rating if requested
+    // Rating sort
     if (sort === "rating") {
       listingsWithRatings.sort((a, b) => b.averageRating - a.averageRating);
     }
 
-    return NextResponse.json({ listings: listingsWithRatings });
+    return NextResponse.json({
+      listings: listingsWithRatings,
+    });
   } catch (error) {
     console.error("Listings fetch error:", error);
+
     return NextResponse.json(
-      { error: "Failed to fetch listings" },
-      { status: 500 }
-    );
-  }
-}
-
-// POST /api/listings — create a new listing
-export async function POST(request: Request) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const userRole = (session.user as any).role;
-    // Allow both HOST and STUDENT to create listings (Students can list spare rooms)
-
-    const body = await request.json();
-    const {
-      title,
-      description,
-      propertyType,
-      numberOfRooms,
-      address,
-      nearestUniversity,
-      distanceToCampus,
-      pricePerSemester,
-      amenities,
-    } = body;
-
-    if (!title || !description || !address || !nearestUniversity || !pricePerSemester) {
-      return NextResponse.json(
-        { error: "Missing required fields" },
-        { status: 400 }
-      );
-    }
-
-    const listing = await prisma.listing.create({
-      data: {
-        title,
-        description,
-        propertyType: propertyType || "SELF_CON",
-        numberOfRooms: numberOfRooms || 1,
-        address,
-        nearestUniversity,
-        distanceToCampus: distanceToCampus || "N/A",
-        pricePerSemester: Number(pricePerSemester),
-        amenities: JSON.stringify(amenities || []),
-        hostId: (session.user as any).id,
+      {
+        error: "Failed to fetch listings",
       },
-      include: {
-        images: true,
+      {
+        status: 500,
       },
-    });
-
-    return NextResponse.json(listing, { status: 201 });
-  } catch (error) {
-    console.error("Create listing error:", error);
-    return NextResponse.json(
-      { error: "Failed to create listing" },
-      { status: 500 }
     );
   }
 }

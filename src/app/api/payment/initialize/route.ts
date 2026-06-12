@@ -34,12 +34,35 @@ export async function POST(request: Request) {
       );
     }
 
+    const userId = (session.user as any).id;
+    if (booking.studentId !== userId) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    if (booking.status !== "CONFIRMED") {
+      return NextResponse.json(
+        { error: "Payment is only available after landlord approval" },
+        { status: 400 }
+      );
+    }
+
+    if (booking.paymentStatus === "PAID") {
+      return NextResponse.json(
+        { error: "This booking has already been paid for" },
+        { status: 400 }
+      );
+    }
+
     const reference = generateReference();
+    const callbackBase = process.env.NEXTAUTH_URL || "http://localhost:3000";
+    const callbackUrl = new URL("/student/bookings", callbackBase);
+    callbackUrl.searchParams.set("reference", reference);
 
     const result = await initializeTransaction({
       email: session.user?.email || "",
       amount: booking.amount,
       reference,
+      callback_url: callbackUrl.toString(),
       metadata: {
         bookingId: booking.id,
         listingId: booking.listingId,
